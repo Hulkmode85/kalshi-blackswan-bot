@@ -53,6 +53,23 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from risk_guard import RiskManager
 
 load_dotenv()
+
+# ── Shadow Logging ────────────────────────────────────────────────────────────
+SHADOW_LOG_FILE = os.getenv("SHADOW_LOG_FILE", "shadow_log.jsonl")
+
+def shadow_log(opportunity: dict, taken: bool, reason: str = ""):
+    entry = {"ts": time.time(), "taken": taken, "reason": reason, **opportunity}
+    try:
+        with open(SHADOW_LOG_FILE, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except:
+        pass
+
+# ── Multi-strike: scan ALL strikes per event/series, not just one ────────────
+MULTI_STRIKE = os.getenv("MULTI_STRIKE", "true").lower() == "true"
+# When fetching markets, iterate through ALL contracts in each series/event
+# and evaluate each strike independently. No single-ticker filtering.
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
@@ -429,6 +446,7 @@ def find_opportunities(
                 edge = ensemble_prob - kalshi_prob
                 ev_after_fees = edge - Config.MAKER_FEE
                 if ev_after_fees <= 0:
+                    shadow_log({"bot": "blackswan", "ticker": market.ticker, "city": city, "edge": edge, "ratio": ratio, "price": kalshi_price}, taken=False, reason=f"negative EV after fees ({ev_after_fees:.3f})")
                     continue
                 if ratio >= Config.RATIO_MIN and kalshi_price <= Config.MAX_PRICE:
                     # Kelly criterion: f* = (model_prob - market_prob) / (1 - market_prob)
@@ -585,8 +603,10 @@ def main():
 
             if Config.PAPER_MODE:
                 ledger.open_position(opp)
+                shadow_log({"bot": "blackswan", "ticker": opp.market_ticker, "city": opp.city, "side": opp.side, "price": opp.kalshi_price, "ratio": opp.ratio, "edge": opp.ensemble_prob - opp.kalshi_prob}, taken=True)
             else:
                 if kalshi.place_order(opp.market_ticker, opp.side, opp.contracts, opp.kalshi_price):
+                    shadow_log({"bot": "blackswan", "ticker": opp.market_ticker, "city": opp.city, "side": opp.side, "price": opp.kalshi_price, "ratio": opp.ratio, "edge": opp.ensemble_prob - opp.kalshi_prob}, taken=True)
                     log.info(f"[LIVE] {opp.side} {opp.market_ticker} @ {opp.kalshi_price}¢ × {opp.contracts}")
 
         # Summary
