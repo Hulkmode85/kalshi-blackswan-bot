@@ -50,6 +50,7 @@ import httpx
 from dotenv import load_dotenv
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
+from risk_guard import RiskManager
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -526,6 +527,7 @@ def main():
     engine = WeatherEngine()
     kalshi = KalshiClient()
     ledger = PaperLedger()
+    risk_manager = RiskManager(starting_balance=Config.PAPER_BALANCE)
     _bot_stats['balance'] = ledger.balance
     threading.Thread(target=_run_stats_server, daemon=True).start()
 
@@ -555,6 +557,23 @@ def main():
         for opp in all_opps:
             if opp.market_ticker in ledger.open_positions:
                 continue
+
+            # Risk guard check
+            if not Config.PAPER_MODE:
+                allowed, reason, capped = risk_manager.pre_trade_check(
+                    opp.city, opp.kalshi_price, opp.contracts, opp.side.lower(),
+                    bot_name="blackswan-bot")
+                if not allowed:
+                    log.warning(f"Risk guard blocked: {reason}")
+                    continue
+                opp.contracts = capped or opp.contracts
+            else:
+                allowed, reason, capped = risk_manager.pre_trade_check(
+                    opp.city, opp.kalshi_price, opp.contracts, opp.side.lower(),
+                    bot_name="blackswan-bot")
+                if not allowed:
+                    log.info(f"[PAPER] Risk guard would block: {reason}")
+
             if Config.PAPER_MODE:
                 ledger.open_position(opp)
             else:
