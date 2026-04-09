@@ -66,12 +66,14 @@ class Config:
 
     # Black swan criteria
     RATIO_MIN:              float = float(os.getenv("RATIO_MIN", "2.5"))      # ensemble_prob / kalshi_prob
+    MAKER_FEE:              float = float(os.getenv("MAKER_FEE", "0.0175"))
     MAX_PRICE:              int   = int(os.getenv("MAX_PRICE", "20"))         # only buy contracts ≤20¢
     MIN_ENSEMBLE_PROB:      float = float(os.getenv("MIN_ENSEMBLE_PROB", "0.03"))  # min 3% model probability
     MIN_HOURS_REMAINING:    int   = int(os.getenv("MIN_HOURS_REMAINING", "12"))
 
     BET_SIZE_USD:           float = float(os.getenv("BET_SIZE_USD", "5.0"))   # small bets on tails
     MAX_BET_USD:            float = float(os.getenv("MAX_BET_USD", "25.0"))
+    KELLY_FRACTION:         float = float(os.getenv("KELLY_FRACTION", "1.0"))
     MAX_OPEN_POSITIONS:     int   = int(os.getenv("MAX_OPEN_POSITIONS", "15")) # diversified tails
     POLL_INTERVAL_SEC:      int   = int(os.getenv("POLL_INTERVAL_SEC", "1800")) # 30 min
 
@@ -424,9 +426,16 @@ def find_opportunities(
                          f"threshold={threshold}°F ensemble={ensemble_prob:.1%} "
                          f"kalshi={kalshi_prob:.1%} ratio={ratio:.1f}x price={kalshi_price}¢")
 
+                edge = ensemble_prob - kalshi_prob
+                ev_after_fees = edge - Config.MAKER_FEE
+                if ev_after_fees <= 0:
+                    continue
                 if ratio >= Config.RATIO_MIN and kalshi_price <= Config.MAX_PRICE:
-                    bet = min(Config.BET_SIZE_USD * ratio / Config.RATIO_MIN, Config.MAX_BET_USD)
-                    contracts = max(1, int(bet * 100 / kalshi_price))
+                    # Kelly criterion: f* = (model_prob - market_prob) / (1 - market_prob)
+                    market_prob = kalshi_price / 100
+                    kelly_f = max(0, (ensemble_prob - market_prob) / (1 - market_prob)) if market_prob < 1 else 0
+                    kelly_bet = max(1, min(self.ledger.balance * kelly_f * Config.KELLY_FRACTION, Config.MAX_BET_USD))
+                    contracts = max(1, int(kelly_bet * 100 / kalshi_price))
                     opps.append(TailOpportunity(
                         city=city, series_ticker=series_ticker,
                         market_ticker=market.ticker,
