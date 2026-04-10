@@ -65,6 +65,46 @@ def shadow_log(opportunity: dict, taken: bool, reason: str = ""):
     except:
         pass
 
+
+# ── Virtual Portfolio Testing ─────────────────────────────────────────────
+VIRTUAL_PORTFOLIO_FILE = os.getenv("VIRTUAL_PORTFOLIO_FILE", "virtual_portfolios.jsonl")
+
+VIRTUAL_PORTFOLIOS = [
+    {"name": "aggressive", "kelly": 1.0, "min_edge": 0.02, "early_exit": 0.99},
+    {"name": "moderate", "kelly": 0.5, "min_edge": 0.05, "early_exit": 0.93},
+    {"name": "conservative", "kelly": 0.25, "min_edge": 0.08, "early_exit": 0.90},
+    {"name": "original_v1", "kelly": 1.0, "min_edge": 0.03, "early_exit": 0.99},
+    {"name": "high_edge", "kelly": 0.5, "min_edge": 0.10, "early_exit": 0.93},
+    {"name": "ultra_conservative", "kelly": 0.25, "min_edge": 0.12, "early_exit": 0.90},
+]
+
+def evaluate_virtual_portfolios(opportunity: dict):
+    """Evaluate what each virtual portfolio would do with this opportunity."""
+    import json, time as _time
+    edge = opportunity.get("edge", 0)
+    price = opportunity.get("price", 0)
+    results = []
+    for vp in VIRTUAL_PORTFOLIOS:
+        would_trade = edge >= vp["min_edge"]
+        would_exit_early = price >= vp["early_exit"] * 100
+        results.append({
+            "portfolio": vp["name"],
+            "would_trade": would_trade,
+            "would_exit_early": would_exit_early,
+            "kelly": vp["kelly"],
+            "min_edge": vp["min_edge"],
+        })
+    entry = {
+        "ts": _time.time(),
+        "opportunity": opportunity,
+        "portfolios": results,
+    }
+    try:
+        with open(VIRTUAL_PORTFOLIO_FILE, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except:
+        pass
+
 # ── Multi-strike: scan ALL strikes per event/series, not just one ────────────
 
 # ─── Regime Detection — pause trading during extreme volatility ────────────
@@ -513,6 +553,7 @@ def find_opportunities(
                 ev_after_fees = edge - Config.MAKER_FEE
                 if ev_after_fees <= 0:
                     shadow_log({"bot": "blackswan", "ticker": market.ticker, "city": city, "edge": edge, "ratio": ratio, "price": kalshi_price}, taken=False, reason=f"negative EV after fees ({ev_after_fees:.3f})")
+                    evaluate_virtual_portfolios({"bot": "blackswan", "ticker": market.ticker, "city": city, "edge": edge, "ratio": ratio, "price": kalshi_price})
                     continue
                 if ratio >= Config.RATIO_MIN and kalshi_price <= Config.MAX_PRICE:
                     # Kelly criterion: f* = (model_prob - market_prob) / (1 - market_prob)
@@ -674,11 +715,14 @@ def main():
                 if regime == "CRASH":
                     log.warning("REGIME CRASH on kalshi_blackswan_bot — skipping trade")
                     shadow_log({"bot": "kalshi_blackswan_bot", "regime": regime}, taken=False, reason="crash regime")
+                    evaluate_virtual_portfolios({"bot": "kalshi_blackswan_bot", "regime": regime})
                     continue
                 shadow_log({"bot": "blackswan", "ticker": opp.market_ticker, "city": opp.city, "side": opp.side, "price": opp.kalshi_price, "ratio": opp.ratio, "edge": opp.ensemble_prob - opp.kalshi_prob}, taken=True)
+                evaluate_virtual_portfolios({"bot": "blackswan", "ticker": opp.market_ticker, "city": opp.city, "side": opp.side, "price": opp.kalshi_price, "ratio": opp.ratio, "edge": opp.ensemble_prob - opp.kalshi_prob})
             else:
                 if kalshi.place_order(opp.market_ticker, opp.side, opp.contracts, opp.kalshi_price):
                     shadow_log({"bot": "blackswan", "ticker": opp.market_ticker, "city": opp.city, "side": opp.side, "price": opp.kalshi_price, "ratio": opp.ratio, "edge": opp.ensemble_prob - opp.kalshi_prob}, taken=True)
+                    evaluate_virtual_portfolios({"bot": "blackswan", "ticker": opp.market_ticker, "city": opp.city, "side": opp.side, "price": opp.kalshi_price, "ratio": opp.ratio, "edge": opp.ensemble_prob - opp.kalshi_prob})
                     log.info(f"[LIVE] {opp.side} {opp.market_ticker} @ {opp.kalshi_price}¢ × {opp.contracts}")
 
         # Summary
