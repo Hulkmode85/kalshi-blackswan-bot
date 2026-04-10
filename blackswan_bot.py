@@ -54,6 +54,27 @@ from risk_guard import RiskManager
 
 load_dotenv()
 
+# ── Quant Fund Shadow Evaluators ─────────────────────────────────────────
+try:
+    from bayesian_updater import BayesianUpdater
+    from ensemble_model import EnsembleModel
+    from time_decay_edge import calculate_time_weighted_edge
+    from correlation_matrix import CorrelationTracker
+    from vpin_toxicity import VPINTracker
+    from market_impact import estimate_market_impact
+    from feature_engine import FeatureEngine
+    from portfolio_optimizer import PortfolioOptimizer
+    _quant_modules_available = True
+    _bayesian = BayesianUpdater()
+    _ensemble = EnsembleModel()
+    _correlation = CorrelationTracker()
+    _vpin = VPINTracker()
+    _features = FeatureEngine()
+    _portfolio = PortfolioOptimizer()
+except ImportError:
+    _quant_modules_available = False
+
+
 # ── Shadow Logging ────────────────────────────────────────────────────────────
 SHADOW_LOG_FILE = os.getenv("SHADOW_LOG_FILE", "shadow_log.jsonl")
 
@@ -554,6 +575,15 @@ def find_opportunities(
                 if ev_after_fees <= 0:
                     shadow_log({"bot": "blackswan", "ticker": market.ticker, "city": city, "edge": edge, "ratio": ratio, "price": kalshi_price}, taken=False, reason=f"negative EV after fees ({ev_after_fees:.3f})")
                     evaluate_virtual_portfolios({"bot": "blackswan", "ticker": market.ticker, "city": city, "edge": edge, "ratio": ratio, "price": kalshi_price})
+                    if _quant_modules_available:
+                        try:
+                            _features.extract({"price": locals().get("price", 0), "volume": locals().get("volume", 0), "bid": locals().get("bid", 0), "ask": locals().get("ask", 0)})
+                            _bayesian.update(locals().get("market_id", locals().get("ticker", "unknown")), locals().get("price", 0), time.time())
+                            _td_edge = calculate_time_weighted_edge(locals().get("edge", 0), locals().get("minutes_remaining", locals().get("time_remaining", 15)), 15)
+                            _vpin.update(locals().get("price", 0), locals().get("volume", 0))
+                            _mi = estimate_market_impact(locals().get("contracts", 1), locals().get("volume", 100))
+                        except:
+                            pass
                     continue
                 if ratio >= Config.RATIO_MIN and kalshi_price <= Config.MAX_PRICE:
                     # Kelly criterion: f* = (model_prob - market_prob) / (1 - market_prob)
